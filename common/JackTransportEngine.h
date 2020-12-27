@@ -104,7 +104,7 @@ class SERVER_EXPORT JackTransportEngine : public JackAtomicArrayState<jack_posit
         bool fPendingPos;
         bool fNetworkSync;
         bool fConditionnal;
-        SInt32 fWriteCounter;
+        std::atomic<SInt32> fWriteCounter {};
 
         bool CheckAllRolling(JackClientInterface** table);
         void MakeAllStartingLocating(JackClientInterface** table);
@@ -173,7 +173,7 @@ class SERVER_EXPORT JackTransportEngine : public JackAtomicArrayState<jack_posit
 
         jack_unique_t GenerateUniqueID()
         {
-            return (jack_unique_t)INC_ATOMIC(&fWriteCounter);
+            return (jack_unique_t)++fWriteCounter;
         }
 
         void RequestNewPos(jack_position_t* pos);

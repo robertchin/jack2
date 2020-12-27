@@ -27,7 +27,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 #include "JackTime.h"
 #include "JackPortType.h"
 #include <math.h>
+#ifndef __STDC_FORMAT_MACROS // defined on MacOS
 #define __STDC_FORMAT_MACROS 1
+#endif
 #include <inttypes.h>
 
 using namespace Jack;

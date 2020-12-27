@@ -39,7 +39,7 @@ class JackActivationCount
 
     private:
 
-        SInt32 fValue;
+        std::atomic<SInt32> fValue;
         SInt32 fCount;
 
     public:

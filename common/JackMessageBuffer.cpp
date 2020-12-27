@@ -58,7 +58,7 @@ bool JackMessageBuffer::Start()
 bool JackMessageBuffer::Stop()
 {
     if (fOverruns > 0) {
-        jack_error("WARNING: %d message buffer overruns!", fOverruns);
+        jack_error("WARNING: %d message buffer overruns!", fOverruns.load());
     } else {
         jack_log("no message buffer overruns");
     }
@@ -93,7 +93,7 @@ void JackMessageBuffer::AddMessage(int level, const char *message)
         fGuard.Signal();
         fGuard.Unlock();
     } else {            /* lock collision */
-        INC_ATOMIC(&fOverruns);
+        fOverruns++;
     }
 }
 

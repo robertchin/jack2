@@ -17,7 +17,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 
 */
 
-#include "JackAtomic.h"
 #include "JackActivationCount.h"
 #include "JackConstants.h"
 #include "JackClientControl.h"
@@ -32,7 +31,7 @@ bool JackActivationCount::Signal(JackSynchro* synchro, JackClientControl* contro
         // Transfer activation to next clients
         jack_log("JackActivationCount::Signal value = 0 ref = %ld", control->fRefNum);
         return synchro->Signal();
-    } else if (DEC_ATOMIC(&fValue) == 1) {
+    } else if (fValue-- == 1) {
         return synchro->Signal();
     } else {
         return true;

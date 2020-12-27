@@ -32,7 +32,6 @@
 
 #include "JackPlatformPlug.h"
 #include "JackMutex.h"
-#include "JackAtomic.h"
 
 namespace Jack
 {
@@ -64,7 +63,7 @@ class JackMessageBuffer : public JackRunnableInterface
         JackProcessSync fGuard;
         volatile unsigned int fInBuffer;
         volatile unsigned int fOutBuffer;
-        SInt32 fOverruns;
+        std::atomic<SInt32> fOverruns;
         bool fRunning;
 
         void Flush();

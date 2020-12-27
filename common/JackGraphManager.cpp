@@ -148,7 +148,7 @@ void JackGraphManager::DirectConnect(int ref1, int ref2)
 {
     JackConnectionManager* manager = WriteNextStateStart();
     manager->DirectConnect(ref1, ref2);
-    jack_log("JackGraphManager::ConnectRefNum cur_index = %ld ref1 = %ld ref2 = %ld", CurIndex(fCounter), ref1, ref2);
+    jack_log("JackGraphManager::ConnectRefNum cur_index = %ld ref1 = %ld ref2 = %ld", fCounter.CurIndex(), ref1, ref2);
     WriteNextStateStop();
 }
 
@@ -157,7 +157,7 @@ void JackGraphManager::DirectDisconnect(int ref1, int ref2)
 {
     JackConnectionManager* manager = WriteNextStateStart();
     manager->DirectDisconnect(ref1, ref2);
-    jack_log("JackGraphManager::DisconnectRefNum cur_index = %ld ref1 = %ld ref2 = %ld", CurIndex(fCounter), ref1, ref2);
+    jack_log("JackGraphManager::DisconnectRefNum cur_index = %ld ref1 = %ld ref2 = %ld", fCounter.CurIndex(), ref1, ref2);
     WriteNextStateStop();
 }
 

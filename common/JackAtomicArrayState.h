@@ -20,9 +20,11 @@
 #ifndef __JackAtomicArrayState__
 #define __JackAtomicArrayState__
 
-#include "JackAtomic.h"
+#include "systemdeps.h"
 #include "JackCompilerDeps.h"
+#include "JackTypes.h"
 #include <string.h> // for memcpy
+#include <atomic>
 
 namespace Jack
 {
@@ -33,48 +35,71 @@ namespace Jack
 PRE_PACKED_STRUCTURE
 struct AtomicArrayCounter
 {
-    union {
+private:
+    union _info {
         struct {
             unsigned char fByteVal[4];
         }
         scounter;
         UInt32 fLongVal;
-    }info;
+    };
 
+    std::atomic<union _info> info;
+
+public:
     AtomicArrayCounter()
     {
-        info.fLongVal = 0;
+	union _info t{};
+        info.store(t, std::memory_order_seq_cst);
     }
 
-    AtomicArrayCounter(volatile const AtomicArrayCounter& obj)
+    AtomicArrayCounter(const AtomicArrayCounter& obj)
     {
-        info.fLongVal = obj.info.fLongVal;
+        info.store(obj.info, std::memory_order_seq_cst);
     }
 
-    AtomicArrayCounter(volatile AtomicArrayCounter& obj)
+    AtomicArrayCounter(AtomicArrayCounter& obj)
     {
-        info.fLongVal = obj.info.fLongVal;
+   	union _info v;
+        v.fLongVal = obj.Counter1();
+        info.store(v, std::memory_order_seq_cst);
     }
 
-    AtomicArrayCounter& operator=(volatile AtomicArrayCounter& obj)
+    AtomicArrayCounter& operator=(AtomicArrayCounter& obj)
     {
-        info.fLongVal = obj.info.fLongVal;
+   	union _info v;
+        v.fLongVal = obj.Counter1();
+        info.store(v, std::memory_order_seq_cst);
         return *this;
     }
-	
-	AtomicArrayCounter& operator=(AtomicArrayCounter& obj)
-	{
-        info.fLongVal = obj.info.fLongVal;
-        return *this;
+       
+    UInt32 Counter1() const { return info.load().fLongVal; }
+    void SetCounter1(UInt32 value) {
+	union _info v = info.load();
+ 	v.fLongVal = value;
+	info.store(v);
     }
-
+    unsigned char GetIndex1(unsigned state) { return info.load().scounter.fByteVal[state]; }
+    void SetIndex1(unsigned state, char val) {
+	union _info v = info.load();
+ 	v.scounter.fByteVal[state] = val;
+	info.store(v);
+    }
+    void IncIndex1(unsigned state) {
+	union _info v = info.load();
+	v.scounter.fByteVal[state]++;
+	info.store(v);
+    }
+    unsigned char SwapIndex1(unsigned state) {
+	union _info v = info.load();
+	return v.scounter.fByteVal[0] = (v.scounter.fByteVal[0] == state) ? 0 : state;
+    }
+    bool CompareExchange(AtomicArrayCounter &old, AtomicArrayCounter &repl) {
+        auto expected = old.info.load();
+        auto value = repl.info.load();
+        return info.compare_exchange_strong(expected, value);
+    }
 } POST_PACKED_STRUCTURE;
-
-#define Counter1(e) (e).info.fLongVal
-#define GetIndex1(e, state) ((e).info.scounter.fByteVal[state])
-#define SetIndex1(e, state, val) ((e).info.scounter.fByteVal[state] = val)
-#define IncIndex1(e, state) ((e).info.scounter.fByteVal[state]++)
-#define SwapIndex1(e, state) (((e).info.scounter.fByteVal[0] == state) ? 0 : state)
 
 /*!
 \brief A class to handle several states in a lock-free manner
@@ -121,7 +146,7 @@ class JackAtomicArrayState
         // fState[2] ==> request
 
         T fState[3];
-        volatile AtomicArrayCounter fCounter;
+        AtomicArrayCounter fCounter{};
 
         UInt32 WriteNextStateStartAux(int state, bool* result)
         {
@@ -133,12 +158,12 @@ class JackAtomicArrayState
             do {
                 old_val = fCounter;
                 new_val = old_val;
-                *result = GetIndex1(new_val, state);
-                cur_index = GetIndex1(new_val, 0);
-                next_index = SwapIndex1(fCounter, state);
-                need_copy = (GetIndex1(new_val, state) == 0);	// Written = false, switch just occurred
-                SetIndex1(new_val, state, 0);					// Written = false, invalidate state
-            } while (!CAS(Counter1(old_val), Counter1(new_val), (UInt32*)&fCounter));
+                *result = new_val.GetIndex1(state);
+                cur_index = new_val.GetIndex1(0);
+                next_index = fCounter.SwapIndex1(state);
+                need_copy = (new_val.GetIndex1(state) == 0);	// Written = false, switch just occurred
+                new_val.SetIndex1(state, 0);					// Written = false, invalidate state
+            } while (!fCounter.CompareExchange(old_val, new_val));
             if (need_copy)
                 memcpy(&fState[next_index], &fState[cur_index], sizeof(T));
             return next_index;
@@ -151,15 +176,15 @@ class JackAtomicArrayState
             do {
                 old_val = fCounter;
                 new_val = old_val;
-                SetIndex1(new_val, state, 1);  // Written = true, state becomes "switchable"
-            } while (!CAS(Counter1(old_val), Counter1(new_val), (UInt32*)&fCounter));
+                new_val.SetIndex1(state, 1);  // Written = true, state becomes "switchable"
+            } while (!fCounter.CompareExchange(old_val, new_val));
         }
 
     public:
 
         JackAtomicArrayState()
         {
-            Counter1(fCounter) = 0;
+            fCounter.SetCounter1(0);
         }
 
         ~JackAtomicArrayState() // Not virtual ??
@@ -171,7 +196,7 @@ class JackAtomicArrayState
 
         T* ReadCurrentState()
         {
-            return &fState[GetIndex1(fCounter, 0)];
+            return &fState[fCounter.GetIndex1(0)];
         }
 
         /*!
@@ -180,7 +205,7 @@ class JackAtomicArrayState
 
         UInt16 GetCurrentIndex()
         {
-            return GetIndex1(fCounter, 3);
+            return fCounter.GetIndex1(3);
         }
 
         /*!
@@ -194,13 +219,13 @@ class JackAtomicArrayState
             do {
                 old_val = fCounter;
                 new_val = old_val;
-                if (GetIndex1(new_val, state)) {						// If state has been written
-                    SetIndex1(new_val, 0, SwapIndex1(new_val, state));	// Prepare switch
-                    SetIndex1(new_val, state, 0);						// Invalidate the state "state"
-                    IncIndex1(new_val, 3);								// Inc switch
+                if (new_val.GetIndex1(state)) {						// If state has been written
+                    new_val.SetIndex1(0, new_val.SwapIndex1(state));	// Prepare switch
+                    new_val.SetIndex1(state, 0);						// Invalidate the state "state"
+                    new_val.IncIndex1(3);								// Inc switch
                 }
-            } while (!CAS(Counter1(old_val), Counter1(new_val), (UInt32*)&fCounter));
-            return &fState[GetIndex1(fCounter, 0)];	// Read the counter again
+            } while (!fCounter.CompareExchange(old_val, new_val));
+            return &fState[fCounter.GetIndex1(0)];	// Read the counter again
         }
 
         /*!
@@ -214,13 +239,13 @@ class JackAtomicArrayState
             do {
                 old_val = fCounter;
                 new_val = old_val;
-                if ((*result = GetIndex1(new_val, state))) {			// If state has been written
-                    SetIndex1(new_val, 0, SwapIndex1(new_val, state));	// Prepare switch
-                    SetIndex1(new_val, state, 0);						// Invalidate the state "state"
-                    IncIndex1(new_val, 3);								// Inc switch
+                if ((*result = new_val.GetIndex1(state))) {			// If state has been written
+                    new_val.SetIndex1(0, new_val.SwapIndex1(state));	// Prepare switch
+                    new_val.SetIndex1(state, 0);						// Invalidate the state "state"
+                    new_val.IncIndex1(3);								// Inc switch
                 }
-            } while (!CAS(Counter1(old_val), Counter1(new_val), (UInt32*)&fCounter));
-            return &fState[GetIndex1(fCounter, 0)];	// Read the counter again
+            } while (!fCounter.CompareExchange(old_val, new_val));
+            return &fState[fCounter.GetIndex1(0)];	// Read the counter again
         }
 
         /*!

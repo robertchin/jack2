@@ -20,9 +20,10 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 #ifndef __JackAtomicState__
 #define __JackAtomicState__
 
-#include "JackAtomic.h"
-#include "JackCompilerDeps.h"
+#include "systemdeps.h"
+#include "JackTypes.h"
 #include <string.h> // for memcpy
+#include <atomic>
 
 namespace Jack
 {
@@ -34,50 +35,68 @@ namespace Jack
 PRE_PACKED_STRUCTURE
 struct AtomicCounter
 {
-    union {
+private:
+    union _info {
         struct {
             UInt16 fShortVal1;	// Cur
             UInt16 fShortVal2;	// Next
         }
         scounter;
         UInt32 fLongVal;
-    }info;
+    };
 
-	AtomicCounter()
-	{
-        info.fLongVal = 0;
-    }
+    std::atomic<union _info> info;
 
-	AtomicCounter(volatile const AtomicCounter& obj)
-	{
-		info.fLongVal = obj.info.fLongVal;
-	}
-
-	AtomicCounter(volatile AtomicCounter& obj)
-	{
-		info.fLongVal = obj.info.fLongVal;
-	}
-
- 	AtomicCounter& operator=(AtomicCounter& obj)
+public:
+    AtomicCounter()
     {
-        info.fLongVal = obj.info.fLongVal;
+        union _info t{};
+        info.store(t, std::memory_order_seq_cst);
+    }
+
+    AtomicCounter(const AtomicCounter& obj)
+    {
+	info.store(obj.info, std::memory_order_seq_cst);
+    }
+
+    AtomicCounter(AtomicCounter& obj)
+    {
+        union _info v;
+        v.fLongVal = obj.Counter();
+        info.store(v, std::memory_order_seq_cst);
+    }
+
+    AtomicCounter& operator=(AtomicCounter& obj)
+    {
+        union _info v;
+        v.fLongVal = obj.Counter();
+        info.store(v, std::memory_order_seq_cst);
         return *this;
     }
 
-	AtomicCounter& operator=(volatile AtomicCounter& obj)
-	{
-        info.fLongVal = obj.info.fLongVal;
-        return *this;
+    UInt32 Counter() const { return info.load().fLongVal; }
+    UInt16 CurIndex() const { return info.load().scounter.fShortVal1; }
+    void SetCurIndex(UInt16 val) {
+	union _info v = info.load();
+	v.scounter.fShortVal1 = val;
+	info.store(v);
     }
+    UInt16 NextIndex() const { return info.load().scounter.fShortVal2; }
+    void SetNextIndex(UInt16 val) {
+        union _info v = info.load();
+        v.scounter.fShortVal2 = val;
+        info.store(v);
+    }
+    UInt16 CurArrayIndex() const { return CurIndex() & 0x0001; }
+    UInt16 NextArrayIndex() const { return (CurIndex() + 1) & 0x0001; }
 
+    bool CompareExchange(AtomicCounter &old, AtomicCounter &repl) {
+        auto expected = old.info.load();
+        auto value = repl.info.load();
+        return info.compare_exchange_strong(expected, value);
+    }
 } POST_PACKED_STRUCTURE;
 
-#define Counter(e) (e).info.fLongVal
-#define CurIndex(e) (e).info.scounter.fShortVal1
-#define NextIndex(e) (e).info.scounter.fShortVal2
-
-#define CurArrayIndex(e) (CurIndex(e) & 0x0001)
-#define NextArrayIndex(e) ((CurIndex(e) + 1) & 0x0001)
 
 /*!
 \brief A class to handle two states (switching from one to the other) in a lock-free manner
@@ -93,7 +112,7 @@ class JackAtomicState
     protected:
 
         T fState[2];
-        volatile AtomicCounter fCounter;
+        AtomicCounter fCounter{};
         SInt32 fCallWriteCounter;
 
         UInt32 WriteNextStateStartAux()
@@ -106,11 +125,11 @@ class JackAtomicState
             do {
                 old_val = fCounter;
                 new_val = old_val;
-                cur_index = CurArrayIndex(new_val);
-                next_index = NextArrayIndex(new_val);
-                need_copy = (CurIndex(new_val) == NextIndex(new_val));
-                NextIndex(new_val) = CurIndex(new_val); // Invalidate next index
-            } while (!CAS(Counter(old_val), Counter(new_val), (UInt32*)&fCounter));
+                cur_index = new_val.CurIndex();
+                next_index = new_val.NextArrayIndex();
+                need_copy = new_val.CurIndex() == new_val.NextIndex();
+                new_val.SetNextIndex(new_val.CurIndex()); // Invalidate next index
+            } while (!fCounter.CompareExchange(old_val,new_val));
             if (need_copy)
                 memcpy(&fState[next_index], &fState[cur_index], sizeof(T));
             return next_index;
@@ -123,15 +142,14 @@ class JackAtomicState
             do {
                 old_val = fCounter;
                 new_val = old_val;
-                NextIndex(new_val)++; // Set next index
-            } while (!CAS(Counter(old_val), Counter(new_val), (UInt32*)&fCounter));
+                new_val.SetNextIndex(new_val.NextIndex() + 1); // Set next index
+            } while (!fCounter.CompareExchange(old_val, new_val));
         }
 
     public:
 
         JackAtomicState()
         {
-            Counter(fCounter) = 0;
             fCallWriteCounter = 0;
         }
 
@@ -143,7 +161,7 @@ class JackAtomicState
         */
         T* ReadCurrentState()
         {
-            return &fState[CurArrayIndex(fCounter)];
+            return &fState[fCounter.CurArrayIndex()];
         }
 
         /*!
@@ -151,7 +169,7 @@ class JackAtomicState
         */
         UInt16 GetCurrentIndex()
         {
-            return CurIndex(fCounter);
+            return fCounter.CurIndex();
         }
 
         /*!
@@ -164,9 +182,9 @@ class JackAtomicState
             do {
                 old_val = fCounter;
                 new_val = old_val;
-                CurIndex(new_val) = NextIndex(new_val);	// Prepare switch
-            } while (!CAS(Counter(old_val), Counter(new_val), (UInt32*)&fCounter));
-            return &fState[CurArrayIndex(fCounter)];	// Read the counter again
+                new_val.SetCurIndex(new_val.NextIndex());  // Prepare switch
+            } while (!fCounter.CompareExchange(old_val, new_val));
+            return &fState[fCounter.CurArrayIndex()];	// Read the counter again
         }
 
         /*!
@@ -179,10 +197,10 @@ class JackAtomicState
             do {
                 old_val = fCounter;
                 new_val = old_val;
-                *result = (CurIndex(new_val) != NextIndex(new_val));
-                CurIndex(new_val) = NextIndex(new_val);  // Prepare switch
-            } while (!CAS(Counter(old_val), Counter(new_val), (UInt32*)&fCounter));
-            return &fState[CurArrayIndex(fCounter)];	// Read the counter again
+                *result = (new_val.CurIndex() != new_val.NextIndex());
+                new_val.SetCurIndex(new_val.NextIndex());  // Prepare switch
+            } while (!fCounter.CompareExchange(old_val, new_val));
+            return &fState[fCounter.CurArrayIndex()];	// Read the counter again
         }
 
         /*!
@@ -192,7 +210,7 @@ class JackAtomicState
         {
             UInt32 next_index = (fCallWriteCounter++ == 0)
                                 ? WriteNextStateStartAux()
-                                : NextArrayIndex(fCounter); // We are inside a wrapping WriteNextStateStart call, NextArrayIndex can be read safely
+                                : fCounter.NextArrayIndex(); // We are inside a wrapping WriteNextStateStart call, NextArrayIndex can be read safely
             return &fState[next_index];
         }
 
@@ -207,7 +225,7 @@ class JackAtomicState
 
         bool IsPendingChange()
         {
-            return CurIndex(fCounter) != NextIndex(fCounter);
+            return fCounter.CurIndex() != fCounter.NextIndex();
         }
 
         /*
